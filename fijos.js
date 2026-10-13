@@ -4,9 +4,8 @@
 (function(){
 // Los que se pagan con la tarjeta: no cuentan como pendientes hasta que llega el resumen.
 // Tiene que coincidir con "Medio habitual = TC" en la pestaña Estructura.
-   const FIJOS_CON_TC = ["Seguro moto", "Cuotas cubiertas", "Cuotas calefón"];
-// Orden en que se muestran los grupos en el checklist
-const ORDEN_GRUPOS = ["Casa", "Pilar", "Personal", "Deportes", "Auto", "Salud", "Comida", "Ocio", "Otros"];
+const FIJOS_CON_TC = ["Seguro moto", "Cuotas cubiertas", "Cuotas calefón"];
+
 
 const norm = s => (s||"").toString().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g,"").trim();
 const escH = s => String(s==null?"":s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -45,8 +44,9 @@ window.renderFijos = function(){
   });
 
   const ordenEstado = {pending:0, tc:1, ok:2};
-  const ordenGrupo = g => { const i = ORDEN_GRUPOS.indexOf(g); return i<0 ? 99 : i; };
-  items.sort((a,b)=> ordenEstado[a.estado]-ordenEstado[b.estado] || ordenGrupo(a.grupo)-ordenGrupo(b.grupo) || a.sub.localeCompare(b.sub,"es"));
+  // Primero lo pendiente, después lo de TC, después lo pagado; dentro de cada uno, el monto más alto primero
+  const montoDe = it => it.estado==="ok" ? it.montoMes : it.ref;
+  items.sort((a,b)=> ordenEstado[a.estado]-ordenEstado[b.estado] || montoDe(b)-montoDe(a));
 
   const etiqueta = {ok:"Pagado", pending:"Pendiente", tc:"Con TC"};
   checklist.innerHTML = items.map(it=>{
