@@ -1,69 +1,42 @@
 /* categorias.js — agrupa los gastos en Grupo > Subcategoría y marca los fijos.
-   Va DESPUÉS de fijos.js. Reclasifica todo el histórico según estas reglas. */
+   Va DESPUÉS de fijos.js.
+   La clasificación ya NO se decide acá: la hace el script de Google con las pestañas
+   "Estructura" y "Diccionario" de la planilla, y la deja en las columnas
+   GRUPO / SUBCATEGORIA / FIJO. Este archivo solo las lee.
+   Para cambiar cómo se clasifica algo, se edita el Diccionario de la planilla. */
 (function(){
 const norm = s => (s||"").toString().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g,"").trim();
-const SC="Servicios casa", JA="Casa: jardín y arreglos", EQ="Casa: equipamiento", AU="Auto y moto",
-      AL="Alimentos", PI="Pilar", SA="Salud", DE="Deportes", SJ="Salidas y juntadas",
-      RP="Ropa y cuidado personal", PR="Proyectos";
 
-// [categoría original (opcional), palabra en la nota, subcategoría, grupo, ¿fijo? 1/0]
-// Se aplica la primera regla que coincida. Para sumar un concepto nuevo, agregá una línea.
-// (Sumé sinónimos que usa la carga por voz: súper, chino, YPF, Edenor, etc.)
-const REGLAS = [
- [null,"regulador","Arreglos",JA,0],
- ["servicios","\\bluz\\b|edenor|edesur","Luz",SC,1],
- ["servicios","\\bgas\\b|metrogas|naturgy|camuzzi","Gas",SC,1],
- [null,"wifi|internet|fibertel|telecentro","Wifi",SC,1],
- [null,"expensas","Expensas",SC,1],
- [null,"municipal|\\babl\\b|arba|impuesto","Municipal",SC,0],
- [null,"jardinero","Jardinero",SC,1],
- [null,"\\bcata\\b","Cata",SC,1],
- [null,"celu|\\bclaro\\b|movistar","Celular",SC,1],
- [null,"ferreter|tapa hierro|plomero|electricista|pintura","Arreglos",JA,0],
- [null,"tierra|riego|chips|cantero|melaleuc|tijera|planta|vivero","Jardín y cantero",JA,0],
- [null,"cloro|pileta","Pileta",JA,0],
- [null,"silla|mueble|heladera","Muebles",EQ,0],
- [null,"calefon","Calefón (cuotas)",EQ,0],
- [null,"nafta|combustible|\\bypf\\b|\\bshell\\b|axion","Nafta",AU,1],
- [null,"seguro","Seguro y registro",AU,1],
- [null,"registro|patente|\\bvtv\\b","Seguro y registro",AU,0],
- [null,"cubierta","Cubiertas (cuotas)",AU,0],
- [null,"peaje|estacionamiento|autopista","Peaje y estacionamiento",AU,0],
- ["auto","frenos|aceite|alineacion|control rueda|valvula|bateria|mecanico|service|lavadero","Mantenimiento",AU,0],
- ["alimentos","coto|supermerc|\\bsuper\\b|\\bchino\\b|carrefour|jumbo|\\bdisco\\b|changomas","Supermercado",AL,0],
- ["alimentos","pizza|empanada|cena sin luz|delivery|rappi|sushi|hamburguesa","Comida hecha",AL,0],
- ["pilar","cuota|comedor|grilli cole|^grilli$|colegio grilli","Colegio",PI,1],
- ["pilar","danza|gimnasia","Actividades",PI,1],
- [null,"psicolog","Psicóloga",SA,1],
- ["deportes","\\bgym\\b|gimnasio","Gym",DE,1],
- [null,"ecoparque|unicenter","Paseos",SJ,0],
- [null,"peluquer","Peluquería",RP,0],
- [null,"publicidad","Publicidad FB",PR,0],
- [null,"stream","Stream y equipo",PR,0],
- [null,"combi","Combi","Otros",0]
-];
-// Si ninguna regla coincide, se usa la categoría vieja (subcategoría "Sin clasificar" para revisar)
-const FALLBACK = {
- "alimentos":["Frescos y almacén",AL], "auto":["Sin clasificar",AU], "pilar":["Escuela y eventos",PI],
- "gastos medicos":["Farmacia",SA], "deportes":["Fútbol",DE], "salidas":["Salidas",SJ], "juntadas":["Juntadas",SJ],
- "ropa":["Ropa",RP], "regalos":["Regalos","Regalos"], "servicios":["Sin clasificar",SC],
- "gastos casa":["Sin clasificar",JA], "otros":["Sin clasificar","Otros"], "vacaciones/viajes":["Viajes","Viajes"]
+// Solo para gastos que todavía no clasificó el script (recién cargados: tarda hasta 15 min).
+// Misma tabla que usa el script de Google cuando una nota no coincide con el Diccionario.
+const POR_CATEGORIA = {
+  "alimentos":        ["Comida", "Súper y almacén"],
+  "pilar":            ["Pilar", "Actividades y varios"],
+  "servicios":        ["Casa", "Mantenimiento y arreglos"],
+  "gastos casa":      ["Casa", "Mantenimiento y arreglos"],
+  "auto":             ["Auto", "Mantenimiento"],
+  "gastos medicos":   ["Salud", "Farmacia"],
+  "deportes":         ["Deportes", "Fútbol"],
+  "salidas":          ["Ocio", "Salidas y juntadas"],
+  "juntadas":         ["Ocio", "Salidas y juntadas"],
+  "regalos":          ["Otros", "Regalos"],
+  "ropa":             ["Personal", "Ropa"],
+  "vacaciones/viajes":["Otros", "Varios"],
+  "otros":            ["Otros", "Varios"]
 };
-
-// Los fijos que se controlan mes a mes en la solapa Gastos Fijos
-FIXED_ITEMS.length = 0;
-FIXED_ITEMS.push("Luz","Gas","Wifi","Expensas","Jardinero","Cata","Celular","Nafta","Seguro","Colegio","Actividades","Psicóloga","Gym");
 
 function clasificar(r){
   if(r.tipo!=="Gasto" || r.sub) return;
-  const cat = norm(r.categoria), nota = norm(r.nota);
   r.catOrig = r.categoria; r.notaOrig = r.nota;
-  const h = REGLAS.find(([c,n]) => (!c || new RegExp(c).test(cat)) && new RegExp(n).test(nota));
-  let sub, grupo, fijo = 0;
-  if(h){ sub=h[2]; grupo=h[3]; fijo=h[4]; }
-  else { const f = FALLBACK[cat] || ["Sin clasificar", r.categoria]; sub=f[0]; grupo=f[1]; }
-  r.sub = sub; r.categoria = grupo; r.fijo = !!fijo;
-  r.nota = sub + (nota && nota!==norm(sub) ? " — "+r.notaOrig : "");
+  let grupo = r.grupoS, sub = r.subS;
+  if(!grupo || !sub || grupo==="Sin clasificar"){
+    const f = POR_CATEGORIA[norm(r.categoria)] || ["Otros", "Varios"];
+    grupo = f[0]; sub = f[1];
+  }
+  r.categoria = grupo;
+  r.sub = sub;
+  r.fijo = r.fijoS === true;
+  r.nota = sub + (r.notaOrig && norm(r.notaOrig)!==norm(sub) ? " — " + r.notaOrig : "");
 }
 
 const base = renderAll;
