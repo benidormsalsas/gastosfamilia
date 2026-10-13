@@ -1,11 +1,15 @@
 /* fijos.js — checklist de la solapa "Gastos Fijos". Se carga DESPUÉS del script principal.
    Qué es fijo lo decide la pestaña "Estructura" de la planilla: el script de Google
-   completa la columna FIJO de cada gasto y este archivo la lee. No hay lista a mano. */
+   completa la columna FIJO de cada gasto y este archivo la lee. No hay lista a mano.
+   Se muestra en dos bloques: "Casa" (todo lo del grupo Casa) y "Extras" (el resto). */
 (function(){
 // Los que se pagan con la tarjeta: no cuentan como pendientes hasta que llega el resumen.
 // Tiene que coincidir con "Medio habitual = TC" en la pestaña Estructura.
 const FIJOS_CON_TC = ["Seguro moto", "Cuotas cubiertas", "Cuotas calefón"];
 
+// Gastos que se repiten todos los meses pero sin monto ni fecha fija: van en Extras
+// con el total del mes, sin pagado/pendiente.
+const VARIABLES = [{ nombre: "Nafta", empieza: "Nafta" }];
 
 const norm = s => (s||"").toString().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g,"").trim();
 const escH = s => String(s==null?"":s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -43,20 +47,31 @@ window.renderFijos = function(){
     return { sub, grupo: grupoDe[sub], estado, montoMes, ref, delMes, notas };
   });
 
-  const ordenEstado = {pending:0, tc:1, ok:2};
-  // Primero lo pendiente, después lo de TC, después lo pagado; dentro de cada uno, el monto más alto primero
-  const montoDe = it => it.estado==="ok" ? it.montoMes : it.ref;
-  items.sort((a,b)=> ordenEstado[a.estado]-ordenEstado[b.estado] || montoDe(b)-montoDe(a));
+  // Recurrentes variables (nafta): total del mes y promedio
+  VARIABLES.forEach(v=>{
+    const filas = gastos.filter(r=>r.sub.startsWith(v.empieza));
+    const delMes = filas.filter(r=>r.ym===ym);
+    const montoMes = delMes.reduce((s,r)=>s+r.monto,0);
+    const mesesCon = [...new Set(filas.filter(r=>r.ym<ym).map(r=>r.ym))];
+    const prom = mesesCon.length ? filas.filter(r=>mesesCon.includes(r.ym)).reduce((s,r)=>s+r.monto,0)/mesesCon.length : 0;
+    pagado += montoMes;
+    items.push({ sub: v.nombre, grupo: "Extras", estado: "var", montoMes, ref: prom, delMes, notas: [] });
+  });
 
-  const etiqueta = {ok:"Pagado", pending:"Pendiente", tc:"Con TC"};
-  checklist.innerHTML = items.map(it=>{
+  const ordenEstado = {pending:0, tc:1, ok:2, var:3};
+  const montoDe = it => (it.estado==="ok" || it.estado==="var") ? it.montoMes : it.ref;
+  const etiqueta = {ok:"Pagado", pending:"Pendiente", tc:"Con TC", var:"Variable"};
+
+  const fila = it=>{
     let nota, monto;
     if(it.estado==="ok"){
-      const fechas = it.delMes.map(r=>r.fecha).join(", ");
-      nota = `${it.grupo} · ${fechas}${it.notas.length ? " · "+escH(it.notas.join(" / ")) : ""}`;
+      nota = it.delMes.map(r=>r.fecha).join(", ") + (it.notas.length ? " · "+escH(it.notas.join(" / ")) : "");
+      monto = fmtMoney(it.montoMes);
+    } else if(it.estado==="var"){
+      nota = `${it.delMes.length} ${it.delMes.length===1?"carga":"cargas"} este mes${it.ref ? " · promedio "+fmtMoney(it.ref)+"/mes" : ""}`;
       monto = fmtMoney(it.montoMes);
     } else {
-      nota = `${it.grupo} · ${it.ref ? "Último pago "+fmtMoney(it.ref) : "Sin pagos anteriores"}${it.estado==="tc" ? " · se tilda al cargar el resumen" : ""}`;
+      nota = (it.ref ? "Último pago "+fmtMoney(it.ref) : "Sin pagos anteriores") + (it.estado==="tc" ? " · se tilda al cargar el resumen" : "");
       monto = it.ref ? "~"+fmtMoney(it.ref) : "";
     }
     return `<div class="fijos-row"><div>
@@ -67,6 +82,19 @@ window.renderFijos = function(){
         <span class="fijos-amt">${monto}</span>
         <span class="fijos-status ${it.estado}">${etiqueta[it.estado]}</span>
       </div></div>`;
+  };
+
+  const bloques = [
+    { nombre: "Casa",   items: items.filter(it=>it.grupo==="Casa") },
+    { nombre: "Extras", items: items.filter(it=>it.grupo!=="Casa") }
+  ];
+  checklist.innerHTML = bloques.filter(b=>b.items.length).map(b=>{
+    b.items.sort((a,c)=> ordenEstado[a.estado]-ordenEstado[c.estado] || montoDe(c)-montoDe(a));
+    const tot = b.items.reduce((s,it)=>s+montoDe(it),0);
+    const nPend = b.items.filter(it=>it.estado==="pending").length;
+    return `<div class="fijos-group"><span class="g-name">${b.nombre}</span>
+      <span class="g-tot">${fmtMoney(tot)}${nPend ? " · "+nPend+" pendiente"+(nPend>1?"s":"") : ""}</span></div>` +
+      b.items.map(fila).join("");
   }).join("");
 
   const total = pagado + pendMonto + tcMonto;
