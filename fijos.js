@@ -4,8 +4,7 @@
 (function(){
 // Los que se pagan con la tarjeta: no cuentan como pendientes hasta que llega el resumen.
 // Tiene que coincidir con "Medio habitual = TC" en la pestaña Estructura.
-const FIJOS_CON_TC = ["Seguro moto", "Cuotas cubiertas"];
-
+   const FIJOS_CON_TC = ["Seguro moto", "Cuotas cubiertas", "Cuotas calefón"];
 // Orden en que se muestran los grupos en el checklist
 const ORDEN_GRUPOS = ["Casa", "Pilar", "Personal", "Deportes", "Auto", "Salud", "Comida", "Ocio", "Otros"];
 
