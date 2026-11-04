@@ -102,6 +102,7 @@ button{font-family:inherit;}
 .fijos-status{font-size:12px;font-weight:700;padding:5px 12px;border-radius:999px;white-space:nowrap;}
 .fijos-status.ok{background:var(--teal-soft);color:var(--teal);} .fijos-status.pending{background:var(--red-soft);color:var(--red);}
 .fijos-status.tc{background:var(--gold-soft);color:#8A5A00;} .fijos-status.var{background:var(--bg);color:var(--ink-soft);}
+.fijos-note .vto{font-weight:700;color:var(--ink);} .fijos-note .vto.urgente{color:var(--red);}
 .fijos-amt{font-size:13px;color:var(--ink-soft);font-weight:600;text-align:right;}
 .fijos-group{display:flex;justify-content:space-between;align-items:baseline;padding:14px 16px 8px;background:var(--bg);font-family:'Poppins',sans-serif;}
 .fijos-group:not(:first-child){border-top:1px solid var(--line);}
@@ -338,7 +339,7 @@ async function loadData(silent){
     const j = await api({a:"todo"});
     if(!j.rows) throw new Error(j.mensaje || "El script no tiene la edición instalada todavía.");
     RAW = j.rows.map(mkRow).filter(Boolean);
-    EST = (j.estructura||[]).map(e=>({grupo:e[0], sub:e[1], fijo:norm(e[2])==="si", medio:(e[3]||"").trim()})).filter(e=>e.grupo&&e.sub);
+    EST = (j.estructura||[]).map(e=>({grupo:e[0], sub:e[1], fijo:norm(e[2])==="si", medio:(e[3]||"").trim(), vto:parseInt(e[4],10)||0})).filter(e=>e.grupo&&e.sub);
     SOLO_LECTURA = false; ok = true;
     banner("");
   }catch(err){
@@ -520,19 +521,25 @@ function renderFijos(){
   const conTC = new Set([...FIJOS_TC_DEFAULT, ...EST.filter(e=>norm(e.medio)==="tc").map(e=>e.sub)]);
   if(!subsFijas.length){ box.innerHTML = `<div class="empty">Todavía no hay gastos marcados como fijos.</div>`; return; }
 
+  const hoy = new Date(), esMesActual = ym===ymOf(hoy.getTime());
+  const [yy,mm] = ym.split("-").map(Number), mesAnt = mm===1 ? (yy-1)+"-12" : yy+"-"+pad(mm-1);
   let pagado=0, pendMonto=0, tcMonto=0; const pend=[];
   const items = subsFijas.map(sub=>{
+    const vto = (EST.find(e=>e.sub===sub)||{}).vto||0;
     const delMes = gastos.filter(r=>r.sub===sub && r.ym===ym);
     const previos = gastos.filter(r=>r.sub===sub && r.ym<ym).sort((a,b)=>b.fechaSort-a.fechaSort);
+    // los que vencen los primeros días (ej. la luz, que llega a fin del mes anterior) cuentan como pagos si se pagaron desde el 20 del mes anterior
+    const anticipado = (!delMes.length && vto && vto<=5) ? gastos.filter(r=>r.sub===sub && r.ym===mesAnt && new Date(r.fechaSort).getDate()>=20) : [];
     const ref = previos.length ? previos[0].monto : 0;
     const montoMes = delMes.reduce((s,r)=>s+r.monto,0);
     const ultTC = previos.length && norm(previos[0].medio)==="tc";
     let estado;
     if(delMes.length){ estado="ok"; pagado+=montoMes; }
+    else if(anticipado.length){ estado="ok"; }
     else if(conTC.has(sub) || ultTC){ estado="tc"; tcMonto+=ref; }
     else { estado="pending"; pendMonto+=ref; pend.push(sub); }
     const notas = delMes.map(r=>r.nota).filter(n=>n && norm(n)!==norm(sub));
-    return {sub, grupo:grupoDe[sub], estado, montoMes, ref, delMes, notas};
+    return {sub, grupo:grupoDe[sub], estado, montoMes, ref, delMes, notas, vto, anticipado};
   });
   VARIABLES.forEach(v=>{
     const filas = gastos.filter(r=>r.sub.startsWith(v.empieza));
@@ -545,24 +552,32 @@ function renderFijos(){
   });
   const orden={pending:0,tc:1,ok:2,var:3}, etq={ok:"Pagado",pending:"Pendiente",tc:"Con TC",var:"Variable"};
   const montoDe = it => (it.estado==="ok"||it.estado==="var") ? it.montoMes : it.ref;
+  const diasPara = it => it.vto ? it.vto - hoy.getDate() : 99;
+  const urgente = it => it.estado==="pending" && esMesActual && it.vto && diasPara(it)<=3;
+  const vtoTxt = it => { if(!it.vto) return "";
+    let t = "Vence el "+it.vto;
+    if(esMesActual){ const d=diasPara(it); t = d<0 ? "Venció el "+it.vto : d===0 ? "Vence hoy" : d===1 ? "Vence mañana" : t; }
+    return `<b class="vto${urgente(it)?" urgente":""}">${t}</b> · `; };
   const fila = it=>{
     let nota, monto;
-    if(it.estado==="ok"){ nota = it.delMes.map(r=>ddmm(r.fechaSort)).join(", ") + (it.notas.length?" · "+esc(it.notas.join(" / ")):""); monto=fmt(it.montoMes); }
+    if(it.estado==="ok" && !it.delMes.length){ nota = "Pagado "+it.anticipado.map(r=>ddmm(r.fechaSort)).join(", ")+" (adelantado)"; monto=fmt(it.anticipado.reduce((s,r)=>s+r.monto,0)); }
+    else if(it.estado==="ok"){ nota = it.delMes.map(r=>ddmm(r.fechaSort)).join(", ") + (it.notas.length?" · "+esc(it.notas.join(" / ")):""); monto=fmt(it.montoMes); }
     else if(it.estado==="var"){ nota = `${it.delMes.length} ${it.delMes.length===1?"carga":"cargas"} este mes`+(it.ref?" · promedio "+fmt(it.ref)+"/mes":""); monto=fmt(it.montoMes); }
-    else { nota = (it.ref?"Último pago "+fmt(it.ref):"Sin pagos anteriores")+(it.estado==="tc"?" · se tilda al cargar el resumen":""); monto = it.ref?"~"+fmt(it.ref):""; }
+    else { nota = (it.estado==="pending"?vtoTxt(it):"")+(it.ref?"Último pago "+fmt(it.ref):"Sin pagos anteriores")+(it.estado==="tc"?" · se tilda al cargar el resumen":""); monto = it.ref?"~"+fmt(it.ref):""; }
     return `<div class="fijos-row"><div><div class="fijos-name">${esc(it.sub)}</div><div class="fijos-note">${nota}</div></div>
       <div style="display:flex;align-items:center;gap:12px"><span class="fijos-amt">${monto}</span><span class="fijos-status ${it.estado}">${etq[it.estado]}</span></div></div>`;
   };
   const bloques=[{n:"Casa",it:items.filter(i=>i.grupo==="Casa")},{n:"Extras",it:items.filter(i=>i.grupo!=="Casa")}];
   box.innerHTML = bloques.filter(b=>b.it.length).map(b=>{
-    b.it.sort((a,c)=>orden[a.estado]-orden[c.estado] || montoDe(c)-montoDe(a));
+    b.it.sort((a,c)=>orden[a.estado]-orden[c.estado] || (a.estado==="pending" ? (a.vto||99)-(c.vto||99) : 0) || montoDe(c)-montoDe(a));
     const tot=b.it.reduce((s,i)=>s+montoDe(i),0), np=b.it.filter(i=>i.estado==="pending").length;
     return `<div class="fijos-group"><span class="g-name">${b.n}</span><span class="g-tot">${fmt(tot)}${np?" · "+np+" pendiente"+(np>1?"s":""):""}</span></div>`+b.it.map(fila).join("");
   }).join("");
   $("sumFijos").textContent = fmt(pagado+pendMonto+tcMonto);
   $("fijosSub").textContent = `${ymLabel(ym)} · Pagado ${fmt(pagado)} · Falta ~${fmt(pendMonto)}`+(tcMonto?` · Con TC ~${fmt(tcMonto)}`:"");
   $("sumPend").textContent = pend.length;
-  $("pendDet").textContent = pend.length ? `${pend.join(", ")} · faltan ~${fmt(pendMonto)}` : "Todo pagado este mes ✓";
+  const pendIt = items.filter(i=>i.estado==="pending").sort((a,c)=>(a.vto||99)-(c.vto||99));
+  $("pendDet").textContent = pend.length ? `${pendIt.map(i=>i.sub+(i.vto?" ("+i.vto+")":"")).join(", ")} · faltan ~${fmt(pendMonto)}` : "Todo pagado este mes ✓";
 }
 
 document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{
