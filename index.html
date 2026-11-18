@@ -576,7 +576,7 @@ function renderFijos(){
     const mc = [...new Set(filas.filter(r=>r.ym<ym).map(r=>r.ym))];
     const prom = mc.length ? filas.filter(r=>mc.includes(r.ym)).reduce((s,r)=>s+r.monto,0)/mc.length : 0;
     pagado += montoMes;
-    items.push({sub:v.nombre, grupo:"Extras", estado:"var", montoMes, ref:prom, delMes, notas:[]});
+    items.push({sub:v.nombre, grupo:(filas[0]&&filas[0].grupo)||"Auto", estado:"var", montoMes, ref:prom, delMes, notas:[]});
   });
   const orden={pending:0,tc:1,ok:2,var:3}, etq={ok:"Pagado",pending:"Pendiente",tc:"Con TC",var:"Variable"};
   const montoDe = it => (it.estado==="ok"||it.estado==="var") ? it.montoMes : it.ref;
@@ -595,7 +595,8 @@ function renderFijos(){
     return `<div class="fijos-row"><div><div class="fijos-name">${esc(it.sub)}</div><div class="fijos-note">${nota}</div></div>
       <div style="display:flex;align-items:center;gap:12px"><span class="fijos-amt">${monto}</span><span class="fijos-status ${it.estado}">${etq[it.estado]}</span></div></div>`;
   };
-  const bloques=[{n:"Casa",it:items.filter(i=>i.grupo==="Casa")},{n:"Extras",it:items.filter(i=>i.grupo!=="Casa")}];
+  const totG = g => items.filter(i=>i.grupo===g).reduce((s,i)=>s+montoDe(i),0);
+  const bloques=[...new Set(items.map(i=>i.grupo))].sort((a,b)=> a==="Casa"?-1 : b==="Casa"?1 : totG(b)-totG(a)).map(g=>({n:g,it:items.filter(i=>i.grupo===g)}));
   box.innerHTML = bloques.filter(b=>b.it.length).map(b=>{
     b.it.sort((a,c)=>orden[a.estado]-orden[c.estado] || (a.estado==="pending" ? (a.vto||99)-(c.vto||99) : 0) || montoDe(c)-montoDe(a));
     const tot=b.it.reduce((s,i)=>s+montoDe(i),0), np=b.it.filter(i=>i.estado==="pending").length;
@@ -618,8 +619,10 @@ function renderFijosCharts({items, gastos, meses, ym, esMesActual}){
                     : it.estado==="var" ? it.montoMes : it.ref;
   const esVar  = r => VARIABLES.some(v=>r.sub.startsWith(v.empieza));
   const esFijo = r => r.fijo || esVar(r);
-  const lblGrupo = g => g==="Casa" ? "Casa" : "Extras";
-  const COL = {Casa:"var(--teal)", Extras:"var(--gold)"};
+  const tg = {}; gastos.filter(esFijo).forEach(r=>{ tg[r.grupo]=(tg[r.grupo]||0)+r.monto; });
+  const grupos = Object.keys(tg).sort((a,b)=> a==="Casa"?-1 : b==="Casa"?1 : tg[b]-tg[a]);
+  const COL = {}; grupos.forEach((g,i)=>COL[g]=PALETTE[i%PALETTE.length]);
+  const legend = arr => `<div class="fc-legend">${arr.map(([g,txt])=>`<span><i style="background:${COL[g]}"></i>${esc(txt)}</span>`).join("")}</div>`;
   const sum = a => a.reduce((s,r)=>s+r.monto,0);
   const mesCorto = m => MESES[+m.split("-")[1]-1];
   const hoyYm = ymOf(Date.now());
@@ -627,17 +630,17 @@ function renderFijosCharts({items, gastos, meses, ym, esMesActual}){
   // 1) Evolución mensual apilada Casa / Extras + % sobre el gasto total
   const evo = meses.slice(-6).map(m=>{
     const f = gastos.filter(r=>r.ym===m && esFijo(r));
-    const casa = sum(f.filter(r=>lblGrupo(r.grupo)==="Casa")), ext = sum(f.filter(r=>lblGrupo(r.grupo)==="Extras"));
-    const gas = sum(gastos.filter(r=>r.ym===m));
-    return {m, casa, ext, tot:casa+ext, pct: gas ? (casa+ext)/gas*100 : 0};
+    const por = {}; grupos.forEach(g=>por[g]=sum(f.filter(r=>r.grupo===g)));
+    const tot = sum(f), gas = sum(gastos.filter(r=>r.ym===m));
+    return {m, por, tot, pct: gas ? tot/gas*100 : 0};
   });
   const maxEvo = Math.max(1, ...evo.map(d=>d.tot));
   const evoHtml = `<div class="fc"><h3>Evolución de los fijos</h3>
-    <div class="fc-sub">Total pagado por mes y qué parte del gasto total representan. Tocá un mes para verlo arriba.</div>
-    <div class="fc-legend"><span><i style="background:${COL.Casa}"></i>Casa</span><span><i style="background:${COL.Extras}"></i>Extras</span></div>
+    <div class="fc-sub">Total por mes, apilado por grupo, y qué parte del gasto total representan. Tocá un mes para verlo arriba.</div>
+    ${legend(grupos.map(g=>[g,g]))}
     <div class="stk">${evo.map(d=>`<div class="col ${d.m===ym?"sel":""}" data-m="${d.m}">
       <span class="tot">${fmtK(d.tot)}</span>
-      <div class="stack"><i style="height:${(d.casa/maxEvo*100).toFixed(1)}%;background:${COL.Casa}"></i><i style="height:${(d.ext/maxEvo*100).toFixed(1)}%;background:${COL.Extras}"></i></div>
+      <div class="stack">${grupos.map(g=>`<i title="${esc(g)} ${fmt(d.por[g])}" style="height:${(d.por[g]/maxEvo*100).toFixed(1)}%;background:${COL[g]}"></i>`).join("")}</div>
       <span class="mes">${mesCorto(d.m)}${d.m===hoyYm?" *":""}</span>
       <span class="pct" title="Fijos sobre el gasto total del mes">${d.pct.toFixed(0)}%</span></div>`).join("")}</div>
     ${evo.some(d=>d.m===hoyYm) ? `<div class="hint">* mes en curso: todavía le faltan pagos. El % es fijos / gasto total del mes.</div>` : `<div class="hint">El % es fijos / gasto total del mes.</div>`}</div>`;
@@ -647,7 +650,8 @@ function renderFijosCharts({items, gastos, meses, ym, esMesActual}){
   const prevDe = it => prevYm ? sum(gastos.filter(r=>r.ym===prevYm && (it.estado==="var" ? r.sub.startsWith(it.sub) : r.sub===it.sub))) : 0;
   const filas = items.map(it=>({it, m:monto(it)})).filter(x=>x.m>0).sort((a,b)=>b.m-a.m);
   const totMes = filas.reduce((s,x)=>s+x.m,0) || 1;
-  const casaMes = filas.filter(x=>lblGrupo(x.it.grupo)==="Casa").reduce((s,x)=>s+x.m,0), extMes = totMes-casaMes;
+  const gMes = {}; filas.forEach(x=>{ gMes[x.it.grupo]=(gMes[x.it.grupo]||0)+x.m; });
+  const gOrden = Object.keys(gMes).sort((a,b)=>gMes[b]-gMes[a]);
   const maxFila = filas.length ? filas[0].m : 1;
   const nota = x => {
     const it = x.it;
@@ -661,10 +665,10 @@ function renderFijosCharts({items, gastos, meses, ym, esMesActual}){
   };
   const compHtml = `<div class="fc"><h3>En qué se va el fijo · ${ymLabel(ym)}</h3>
     <div class="fc-sub">Mayor a menor, con su peso sobre el total de fijos (${fmt(totMes)}).</div>
-    <div class="mix"><i style="width:${(casaMes/totMes*100).toFixed(1)}%;background:${COL.Casa}"></i><i style="width:${(extMes/totMes*100).toFixed(1)}%;background:${COL.Extras}"></i></div>
-    <div class="fc-legend"><span><i style="background:${COL.Casa}"></i>Casa ${fmt(casaMes)} · ${(casaMes/totMes*100).toFixed(0)}%</span><span><i style="background:${COL.Extras}"></i>Extras ${fmt(extMes)} · ${(extMes/totMes*100).toFixed(0)}%</span></div>
-    ${filas.map(x=>`<div class="hb"><div class="hb-l">${esc(x.it.sub)}<small>${(x.m/totMes*100).toFixed(1)}% del total</small></div>
-      <div class="hb-t"><i style="width:${(x.m/maxFila*100).toFixed(0)}%;background:${COL[lblGrupo(x.it.grupo)]}"></i></div>
+    <div class="mix">${gOrden.map(g=>`<i style="width:${(gMes[g]/totMes*100).toFixed(1)}%;background:${COL[g]}"></i>`).join("")}</div>
+    ${legend(gOrden.map(g=>[g, `${g} ${fmt(gMes[g])} · ${(gMes[g]/totMes*100).toFixed(0)}%`]))}
+    ${filas.map(x=>`<div class="hb"><div class="hb-l">${esc(x.it.sub)}<small>${esc(x.it.grupo)} · ${(x.m/totMes*100).toFixed(1)}%</small></div>
+      <div class="hb-t"><i style="width:${(x.m/maxFila*100).toFixed(0)}%;background:${COL[x.it.grupo]}"></i></div>
       <div class="hb-v">${fmt(x.m)}${nota(x)}</div></div>`).join("")}</div>`;
 
   // 3) Por vencimiento: cuánta plata hay que tener lista y para cuándo
