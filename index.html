@@ -172,7 +172,8 @@ footer{margin-top:24px;font-size:11px;color:var(--ink-soft);display:flex;justify
 
   <div class="masthead">
     <div><div class="kicker">Registro doméstico · en tiempo real</div><h1>Libro de Gastos</h1></div>
-    <div class="balance-pill" id="pill"><span class="lbl">Balance</span>—</div>
+    <div style="display:flex;gap:8px;align-items:center;"><button class="chip" id="btnReload" title="Actualizar la página">↻ Actualizar</button>
+      <div class="balance-pill" id="pill"><span class="lbl">Balance</span>—</div></div>
   </div>
 
   <div class="tabs">
@@ -693,6 +694,7 @@ function renderFijosCharts({items, gastos, meses, ym, esMesActual}){
   box.querySelectorAll(".stk .col").forEach(c=>c.onclick=()=>{ F.mes=c.dataset.m; $("fMes").value=F.mes; render(); });
 }
 
+$("btnReload").onclick = () => { const u = new URL(location.href); u.searchParams.set("v", Date.now()); location.replace(u.toString()); };
 document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{
   document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("active",x===t));
   $("view-mov").classList.toggle("hidden", t.dataset.view!=="mov");
