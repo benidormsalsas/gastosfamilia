@@ -108,6 +108,32 @@ button{font-family:inherit;}
 .fijos-group:not(:first-child){border-top:1px solid var(--line);}
 .g-name{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--navy);} .g-tot{font-size:12px;font-weight:600;color:var(--ink-soft);}
 
+/* Fijos: gráficos y agrupaciones */
+.fc{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);padding:14px 16px 16px;margin-bottom:14px;}
+.fc h3{font-family:'Poppins',sans-serif;font-size:13px;margin:0 0 2px;color:var(--navy);}
+.fc .fc-sub{font-size:12px;color:var(--ink-soft);margin-bottom:12px;}
+.fc-legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--ink-soft);font-weight:600;margin-bottom:10px;}
+.fc-legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px;}
+.stk{display:flex;gap:8px;align-items:flex-end;}
+.stk .col{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;min-width:0;cursor:pointer;}
+.stk .tot{font-size:11px;font-weight:700;color:var(--navy);white-space:nowrap;}
+.stk .stack{display:flex;flex-direction:column-reverse;width:100%;max-width:46px;height:110px;justify-content:flex-start;}
+.stk .stack i{display:block;width:100%;}
+.stk .stack i:last-child{border-radius:6px 6px 0 0;}
+.stk .mes{font-size:11px;font-weight:600;color:var(--ink-soft);}
+.stk .col.sel .mes{color:var(--navy);} .stk .col.sel .stack{outline:2px solid var(--gold);outline-offset:3px;border-radius:6px;}
+.stk .pct{font-size:10.5px;font-weight:600;color:var(--ink-soft);background:var(--bg);border-radius:999px;padding:1px 7px;}
+.hb{display:grid;grid-template-columns:minmax(80px,32%) 1fr auto;gap:10px;align-items:center;padding:6px 0;}
+.hb-l{font-size:13px;font-weight:600;color:var(--navy);overflow-wrap:anywhere;line-height:1.25;}
+.hb-l small{display:block;font-size:11px;font-weight:500;color:var(--ink-soft);}
+.hb-t{height:10px;background:var(--bg);border-radius:6px;overflow:hidden;}
+.hb-t i{display:block;height:100%;border-radius:6px;}
+.hb-v{font-size:13px;font-weight:700;color:var(--navy);text-align:right;white-space:nowrap;}
+.hb-v small{display:block;font-size:11px;font-weight:600;}
+.up{color:var(--red);} .down{color:var(--teal);} .flat{color:var(--ink-soft);}
+.mix{display:flex;height:14px;border-radius:7px;overflow:hidden;margin:2px 0 8px;}
+.mix i{display:block;height:100%;}
+
 /* Botón + editor */
 .fab{position:fixed;right:18px;bottom:20px;z-index:50;font-family:'Poppins',sans-serif;font-weight:700;font-size:15px;background:var(--teal);color:#fff;border:none;border-radius:999px;padding:14px 22px;box-shadow:0 6px 18px rgba(18,138,130,.35);cursor:pointer;}
 .ov{position:fixed;inset:0;background:rgba(27,42,58,.45);z-index:60;display:none;align-items:flex-end;justify-content:center;}
@@ -202,6 +228,7 @@ footer{margin-top:24px;font-size:11px;color:var(--ink-soft);display:flex;justify
       <div class="card fixed"><span class="pill">PENDIENTES</span><div class="value" id="sumPend">—</div><div class="subvalue" id="pendDet"></div></div>
     </div>
     <div class="fijos-checklist" id="fijosList"></div>
+    <div id="fijosCharts"></div>
   </div>
 
   <footer><span id="fCount"></span><span id="fUpd"></span></footer>
@@ -578,6 +605,92 @@ function renderFijos(){
   $("sumPend").textContent = pend.length;
   const pendIt = items.filter(i=>i.estado==="pending").sort((a,c)=>(a.vto||99)-(c.vto||99));
   $("pendDet").textContent = pend.length ? `${pendIt.map(i=>i.sub+(i.vto?" ("+i.vto+")":"")).join(", ")} · faltan ~${fmt(pendMonto)}` : "Todo pagado este mes ✓";
+  renderFijosCharts({items, gastos, meses, ym, esMesActual});
+}
+
+/* ---------- Gráficos y agrupaciones de la solapa Gastos fijos ---------- */
+const fmtK = n => { const v=Math.abs(n||0); return v>=1e6 ? "$"+(v/1e6).toFixed(1).replace(".",",")+" M" : "$"+Math.round(v/1e3)+" mil"; };
+
+function renderFijosCharts({items, gastos, meses, ym, esMesActual}){
+  const box = $("fijosCharts");
+  const monto = it => it.estado==="ok" ? (it.delMes.length ? it.montoMes : (it.anticipado||[]).reduce((s,r)=>s+r.monto,0))
+                    : it.estado==="var" ? it.montoMes : it.ref;
+  const esVar  = r => VARIABLES.some(v=>r.sub.startsWith(v.empieza));
+  const esFijo = r => r.fijo || esVar(r);
+  const lblGrupo = g => g==="Casa" ? "Casa" : "Extras";
+  const COL = {Casa:"var(--teal)", Extras:"var(--gold)"};
+  const sum = a => a.reduce((s,r)=>s+r.monto,0);
+  const mesCorto = m => MESES[+m.split("-")[1]-1];
+  const hoyYm = ymOf(Date.now());
+
+  // 1) Evolución mensual apilada Casa / Extras + % sobre el gasto total
+  const evo = meses.slice(-6).map(m=>{
+    const f = gastos.filter(r=>r.ym===m && esFijo(r));
+    const casa = sum(f.filter(r=>lblGrupo(r.grupo)==="Casa")), ext = sum(f.filter(r=>lblGrupo(r.grupo)==="Extras"));
+    const gas = sum(gastos.filter(r=>r.ym===m));
+    return {m, casa, ext, tot:casa+ext, pct: gas ? (casa+ext)/gas*100 : 0};
+  });
+  const maxEvo = Math.max(1, ...evo.map(d=>d.tot));
+  const evoHtml = `<div class="fc"><h3>Evolución de los fijos</h3>
+    <div class="fc-sub">Total pagado por mes y qué parte del gasto total representan. Tocá un mes para verlo arriba.</div>
+    <div class="fc-legend"><span><i style="background:${COL.Casa}"></i>Casa</span><span><i style="background:${COL.Extras}"></i>Extras</span></div>
+    <div class="stk">${evo.map(d=>`<div class="col ${d.m===ym?"sel":""}" data-m="${d.m}">
+      <span class="tot">${fmtK(d.tot)}</span>
+      <div class="stack"><i style="height:${(d.casa/maxEvo*100).toFixed(1)}%;background:${COL.Casa}"></i><i style="height:${(d.ext/maxEvo*100).toFixed(1)}%;background:${COL.Extras}"></i></div>
+      <span class="mes">${mesCorto(d.m)}${d.m===hoyYm?" *":""}</span>
+      <span class="pct" title="Fijos sobre el gasto total del mes">${d.pct.toFixed(0)}%</span></div>`).join("")}</div>
+    ${evo.some(d=>d.m===hoyYm) ? `<div class="hint">* mes en curso: todavía le faltan pagos. El % es fijos / gasto total del mes.</div>` : `<div class="hint">El % es fijos / gasto total del mes.</div>`}</div>`;
+
+  // 2) Composición del mes por subcategoría (con variación vs mes anterior)
+  const idx = meses.indexOf(ym), prevYm = idx>0 ? meses[idx-1] : null;
+  const prevDe = it => prevYm ? sum(gastos.filter(r=>r.ym===prevYm && (it.estado==="var" ? r.sub.startsWith(it.sub) : r.sub===it.sub))) : 0;
+  const filas = items.map(it=>({it, m:monto(it)})).filter(x=>x.m>0).sort((a,b)=>b.m-a.m);
+  const totMes = filas.reduce((s,x)=>s+x.m,0) || 1;
+  const casaMes = filas.filter(x=>lblGrupo(x.it.grupo)==="Casa").reduce((s,x)=>s+x.m,0), extMes = totMes-casaMes;
+  const maxFila = filas.length ? filas[0].m : 1;
+  const nota = x => {
+    const it = x.it;
+    if(it.estado==="pending") return `<small class="flat">pendiente (~último pago)</small>`;
+    if(it.estado==="tc") return `<small class="flat">con TC (~último pago)</small>`;
+    if(it.estado==="var" && esMesActual) return `<small class="flat">en curso</small>`;
+    const p = prevDe(it); if(!p) return prevYm ? `<small class="flat">nuevo</small>` : "";
+    const d = (x.m-p)/p*100;
+    if(Math.abs(d)<1) return `<small class="flat">= ${mesCorto(prevYm)}</small>`;
+    return `<small class="${d>0?"up":"down"}">${d>0?"▲":"▼"} ${Math.abs(d).toFixed(0)}% vs ${mesCorto(prevYm)}</small>`;
+  };
+  const compHtml = `<div class="fc"><h3>En qué se va el fijo · ${ymLabel(ym)}</h3>
+    <div class="fc-sub">Mayor a menor, con su peso sobre el total de fijos (${fmt(totMes)}).</div>
+    <div class="mix"><i style="width:${(casaMes/totMes*100).toFixed(1)}%;background:${COL.Casa}"></i><i style="width:${(extMes/totMes*100).toFixed(1)}%;background:${COL.Extras}"></i></div>
+    <div class="fc-legend"><span><i style="background:${COL.Casa}"></i>Casa ${fmt(casaMes)} · ${(casaMes/totMes*100).toFixed(0)}%</span><span><i style="background:${COL.Extras}"></i>Extras ${fmt(extMes)} · ${(extMes/totMes*100).toFixed(0)}%</span></div>
+    ${filas.map(x=>`<div class="hb"><div class="hb-l">${esc(x.it.sub)}<small>${(x.m/totMes*100).toFixed(1)}% del total</small></div>
+      <div class="hb-t"><i style="width:${(x.m/maxFila*100).toFixed(0)}%;background:${COL[lblGrupo(x.it.grupo)]}"></i></div>
+      <div class="hb-v">${fmt(x.m)}${nota(x)}</div></div>`).join("")}</div>`;
+
+  // 3) Por vencimiento: cuánta plata hay que tener lista y para cuándo
+  const orden = ["Días 1–5","Días 6–10","Días 11–20","Día 21 en adelante","Con tarjeta","Sin fecha fija"];
+  const bucket = it => it.estado==="tc" ? "Con tarjeta" : (it.estado==="var" || !it.vto) ? "Sin fecha fija"
+                     : it.vto<=5 ? "Días 1–5" : it.vto<=10 ? "Días 6–10" : it.vto<=20 ? "Días 11–20" : "Día 21 en adelante";
+  const bk = {}; filas.forEach(x=>{ const b=bucket(x.it); (bk[b]=bk[b]||{m:0,subs:[]}); bk[b].m+=x.m; bk[b].subs.push(x.it.sub); });
+  const maxBk = Math.max(1, ...Object.values(bk).map(b=>b.m));
+  const vtoHtml = `<div class="fc"><h3>Por vencimiento</h3>
+    <div class="fc-sub">Cuánto vence en cada tramo del mes, para saber cuándo tener la plata.</div>
+    ${orden.filter(o=>bk[o]).map(o=>`<div class="hb"><div class="hb-l">${o}<small>${esc(bk[o].subs.join(", "))}</small></div>
+      <div class="hb-t"><i style="width:${(bk[o].m/maxBk*100).toFixed(0)}%;background:var(--navy)"></i></div>
+      <div class="hb-v">${fmt(bk[o].m)}<small class="flat">${(bk[o].m/totMes*100).toFixed(0)}%</small></div></div>`).join("")}</div>`;
+
+  // 4) Cómo se pagan (medio de pago) en el mes
+  const delMes = gastos.filter(r=>r.ym===ym && esFijo(r));
+  const porMedio = {}; delMes.forEach(r=>{ const k=r.medio||"Sin dato"; porMedio[k]=(porMedio[k]||0)+r.monto; });
+  const medios = Object.entries(porMedio).sort((a,b)=>b[1]-a[1]), totMed = medios.reduce((s,m)=>s+m[1],0);
+  const medHtml = medios.length ? `<div class="fc"><h3>Cómo se pagan · ${ymLabel(ym)}</h3>
+    <div class="fc-sub">Medio de pago de los fijos ya cargados este mes.</div>
+    <div class="mix">${medios.map(([k,v],i)=>`<i style="width:${(v/totMed*100).toFixed(1)}%;background:${PALETTE[i%PALETTE.length]}"></i>`).join("")}</div>
+    <div class="fc-legend">${medios.map(([k,v],i)=>`<span><i style="background:${PALETTE[i%PALETTE.length]}"></i>${esc(k)} ${fmt(v)} · ${(v/totMed*100).toFixed(0)}%</span>`).join("")}</div></div>` : "";
+
+  const hayVto = filas.some(x=>x.it.vto);
+  const sinDato = (porMedio["Sin dato"]||0)/(totMed||1);
+  box.innerHTML = evoHtml + compHtml + (hayVto ? vtoHtml : "") + (sinDato>0.8 ? "" : medHtml);
+  box.querySelectorAll(".stk .col").forEach(c=>c.onclick=()=>{ F.mes=c.dataset.m; $("fMes").value=F.mes; render(); });
 }
 
 document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{
