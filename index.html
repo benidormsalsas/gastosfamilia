@@ -179,6 +179,7 @@ footer{margin-top:24px;font-size:11px;color:var(--ink-soft);display:flex;justify
   <div class="tabs">
     <button class="tab active" data-view="mov">Movimientos</button>
     <button class="tab" data-view="fijos">Gastos fijos</button>
+    <button class="tab" data-view="tarjeta">Tarjeta</button>
   </div>
 
   <div id="banner" class="banner hidden"></div>
@@ -230,6 +231,15 @@ footer{margin-top:24px;font-size:11px;color:var(--ink-soft);display:flex;justify
     </div>
     <div class="fijos-checklist" id="fijosList"></div>
     <div id="fijosCharts"></div>
+  </div>
+
+  <!-- ===================== TARJETA ===================== -->
+  <div id="view-tarjeta" class="hidden">
+    <div class="summary" style="grid-template-columns:1fr 1fr;">
+      <div class="card expense"><span class="pill" id="tjPill">A PAGAR</span><div class="value" id="tjTot">—</div><div class="subvalue" id="tjSub"></div></div>
+      <div class="card fixed"><span class="pill">EN CUOTAS</span><div class="value" id="tjCuo">—</div><div class="subvalue" id="tjCuoSub"></div></div>
+    </div>
+    <div id="tjBody"></div>
   </div>
 
   <footer><span id="fCount"></span><span id="fUpd"></span></footer>
@@ -341,6 +351,10 @@ function mkRow(o){
   const r = { id: nextId++, row: o.row||0, ts: o.ts, tipo: isG?"Gasto":"Ingreso", cat: (o.cat||"").trim(),
     monto: num(o.monto), nota: (o.nota||"").toString().trim(), medio: (o.medio||"").trim(), origen: (o.origen||"").trim(),
     fechaSort: t, ym: ymOf(t) };
+  // TC: el consumo se cuenta en el mes en que se paga el resumen (ORIGEN = "Resumen TC AAAA-MM")
+  r.compraYm = r.ym;
+  const mp = r.origen.match(/(\d{4}-\d{2})/);
+  if(mp && norm(r.medio)==="tc"){ r.ym = mp[1]; r.conResumen = true; }
   if(isG){
     let g=(o.grupo||"").trim(), s=(o.sub||"").trim();
     if(!g || !s || g==="Sin clasificar"){ const f=POR_CAT[norm(o.cat)]||["Otros","Varios"]; g=f[0]; s=f[1]; r.sinClasificar=true; }
@@ -456,7 +470,7 @@ function filtered(){
 /* ============================================================
    RENDER — MOVIMIENTOS
    ============================================================ */
-function render(){ renderMov(); renderFijos(); }
+function render(){ renderMov(); renderFijos(); renderTarjeta(); }
 
 function renderMov(){
   const rows = filtered();
@@ -698,11 +712,97 @@ function renderFijosCharts({items, gastos, meses, ym, esMesActual}){
   box.querySelectorAll(".stk .col").forEach(c=>c.onclick=()=>{ F.mes=c.dataset.m; $("fMes").value=F.mes; render(); });
 }
 
+
+/* ============================================================
+   TARJETA DE CRÉDITO (por mes de pago del resumen)
+   ============================================================ */
+let TJ_MES = "";
+const addYm = (ym, n) => { const [y,m]=ym.split("-").map(Number); const d=new Date(y, m-1+n, 1); return d.getFullYear()+"-"+pad(d.getMonth()+1); };
+function cuotaDe(nota){
+  const m = String(nota||"").match(/cuota\s*(\d+)\s*(?:\/|de)\s*(\d+)/i);
+  if(!m) return null;
+  const k=+m[1], n=+m[2]; if(!n||k>n) return null;
+  const nombre = String(nota).replace(/\s*[-–]?\s*cuota\s*\d+\s*(?:\/|de)\s*\d+.*$/i,"").trim() || String(nota).trim();
+  return {k, n, nombre};
+}
+function renderTarjeta(){
+  const body = $("tjBody"); if(!body) return;
+  const tc = RAW.filter(r=>r.tipo==="Gasto" && norm(r.medio)==="tc");
+  if(!tc.length){ body.innerHTML = `<div class="state-msg">Todavía no hay consumos con tarjeta.</div>`; $("tjTot").textContent="—"; $("tjCuo").textContent="—"; return; }
+  const sum = a => a.reduce((s,r)=>s+r.monto,0);
+  const meses = [...new Set(tc.map(r=>r.ym))].sort();
+  const ultimo = meses[meses.length-1];
+
+  // Cuotas vigentes: la última cuota vista de cada compra, si todavía no es la final
+  const ult = {};
+  tc.forEach(r=>{ const c=cuotaDe(r.nota); if(!c) return; const key=norm(c.nombre);
+    if(!ult[key] || r.ym>ult[key].r.ym) ult[key]={r,c}; });
+  const activas = Object.values(ult).filter(x=>x.c.k<x.c.n);
+  const futuro = {}; // ym -> monto comprometido
+  activas.forEach(({r,c})=>{ for(let j=1;j<=c.n-c.k;j++){ const ym=addYm(r.ym,j); futuro[ym]=(futuro[ym]||0)+r.monto; } });
+
+  if(!TJ_MES || !meses.includes(TJ_MES)) TJ_MES = meses.includes(ymOf(Date.now())) ? ymOf(Date.now()) : ultimo;
+  const ym = TJ_MES, prev = addYm(ym,-1);
+  const delMes = tc.filter(r=>r.ym===ym), delPrev = tc.filter(r=>r.ym===prev);
+  const tot = sum(delMes), totPrev = sum(delPrev);
+  const cuoMes = delMes.filter(r=>cuotaDe(r.nota));
+  const dif = totPrev ? (tot-totPrev)/totPrev*100 : null;
+
+  $("tjPill").textContent = "A PAGAR "+ymLabel(ym).toUpperCase();
+  $("tjTot").textContent = fmt(tot);
+  $("tjSub").innerHTML = dif==null ? `${delMes.length} consumos` : `${delMes.length} consumos · <span class="${dif>0?"up":"down"}">${dif>0?"▲":"▼"} ${Math.abs(dif).toFixed(0)}%</span> vs ${ymLabel(prev)}`;
+  $("tjCuo").textContent = fmt(sum(cuoMes));
+  $("tjCuoSub").textContent = tot ? `${(sum(cuoMes)/tot*100).toFixed(0)}% del resumen · ${cuoMes.length} cuotas` : "";
+
+  // Selector de mes
+  const selHtml = `<div class="fc" style="padding:10px 14px;"><div class="seg" style="flex-wrap:wrap;">${meses.map(m=>`<button data-m="${m}" class="${m===ym?"on":""}">${ymLabel(m)}</button>`).join("")}</div>
+    ${delMes.some(r=>!r.conResumen) ? `<div class="hint">Hay consumos de este mes con TC que todavía no están asignados a un resumen: se cuentan por fecha de compra.</div>`:""}</div>`;
+
+  // Evolución apilada por grupo
+  const grupos = Object.entries(tc.reduce((a,r)=>{a[r.grupo]=(a[r.grupo]||0)+r.monto;return a;},{})).sort((a,b)=>b[1]-a[1]).map(x=>x[0]);
+  const COL = {}; grupos.forEach((g,i)=>COL[g]=PALETTE[i%PALETTE.length]);
+  const evo = meses.slice(-6).map(m=>{ const f=tc.filter(r=>r.ym===m); const por={}; grupos.forEach(g=>por[g]=sum(f.filter(r=>r.grupo===g))); return {m,por,tot:sum(f)}; });
+  const maxEvo = Math.max(1,...evo.map(d=>d.tot));
+  const legend = `<div class="fc-legend">${grupos.map(g=>`<span><i style="background:${COL[g]}"></i>${esc(g)}</span>`).join("")}</div>`;
+  const evoHtml = `<div class="fc"><h3>Evolución del resumen</h3><div class="fc-sub">Lo que se paga de TC cada mes, por grupo. Tocá un mes para verlo.</div>${legend}
+    <div class="stk">${evo.map(d=>`<div class="col ${d.m===ym?"sel":""}" data-m="${d.m}"><div class="tot">${fmt(d.tot)}</div>
+      <div class="stack" style="height:${Math.max(6,d.tot/maxEvo*110).toFixed(0)}px">${grupos.map(g=>d.por[g]?`<i title="${esc(g)} ${fmt(d.por[g])}" style="height:${(d.por[g]/d.tot*100).toFixed(1)}%;background:${COL[g]}"></i>`:"").join("")}</div>
+      <div class="mes">${MESES[+d.m.split("-")[1]-1]}</div></div>`).join("")}</div></div>`;
+
+  // En qué se gasta (grupo → subcategoría) con variación vs mes anterior
+  const porG = {}; delMes.forEach(r=>{ (porG[r.grupo] = porG[r.grupo]||{tot:0,subs:{}}); porG[r.grupo].tot+=r.monto; porG[r.grupo].subs[r.sub]=(porG[r.grupo].subs[r.sub]||0)+r.monto; });
+  const prevG = {}; delPrev.forEach(r=>{ prevG[r.grupo]=(prevG[r.grupo]||0)+r.monto; });
+  const gOrden = Object.entries(porG).sort((a,b)=>b[1].tot-a[1].tot);
+  const maxG = Math.max(1,...gOrden.map(x=>x[1].tot));
+  const varTxt = g => { if(!totPrev) return ""; const a=prevG[g]||0, b=porG[g].tot; if(!a) return `<small class="flat">nuevo</small>`; const d=(b-a)/a*100; return `<small class="${d>0?"up":"down"}">${d>0?"▲":"▼"} ${Math.abs(d).toFixed(0)}%</small>`; };
+  const grupoHtml = `<div class="fc"><h3>En qué se va · ${ymLabel(ym)}</h3><div class="fc-sub">Por grupo, de mayor a menor, y cuánto cambió contra ${ymLabel(prev)}.</div>
+    ${gOrden.map(([g,o])=>`<div class="hb"><div class="hb-l">${esc(g)}<small>${Object.entries(o.subs).sort((a,b)=>b[1]-a[1]).map(([s,v])=>esc(s)+" "+fmt(v)).join(" · ")}</small></div>
+      <div class="hb-t"><i style="width:${(o.tot/maxG*100).toFixed(0)}%;background:${COL[g]}"></i></div><div class="hb-v">${fmt(o.tot)}<br>${(o.tot/tot*100).toFixed(0)}%${varTxt(g)?" "+varTxt(g):""}</div></div>`).join("")}</div>`;
+
+  // Cuotas: activas y lo comprometido para los próximos meses
+  const proxMeses = Object.keys(futuro).sort().slice(0,6);
+  const maxF = Math.max(1,...proxMeses.map(m=>futuro[m]));
+  const cuotasHtml = activas.length ? `<div class="fc"><h3>Cuotas en curso</h3><div class="fc-sub">Lo que ya está comprometido en los próximos resúmenes (sin contar consumos nuevos).</div>
+    ${activas.sort((a,b)=>b.r.monto-a.r.monto).map(({r,c})=>`<div class="hb"><div class="hb-l">${esc(c.nombre)}<small>cuota ${c.k}/${c.n} · quedan ${c.n-c.k} · hasta ${ymLabel(addYm(r.ym,c.n-c.k))}</small></div>
+      <div class="hb-t"><i style="width:${(c.k/c.n*100).toFixed(0)}%;background:var(--teal)"></i></div><div class="hb-v">${fmt(r.monto)}<small class="flat">por mes</small></div></div>`).join("")}
+    <div style="border-top:1px solid var(--line);margin-top:10px;padding-top:10px;"><div class="fc-sub" style="margin-bottom:6px;">Comprometido por mes en cuotas</div>
+    ${proxMeses.map(m=>`<div class="hb"><div class="hb-l">${ymLabel(m)}</div><div class="hb-t"><i style="width:${(futuro[m]/maxF*100).toFixed(0)}%;background:var(--gold)"></i></div><div class="hb-v">${fmt(futuro[m])}</div></div>`).join("")}</div></div>` : "";
+
+  // Detalle del resumen
+  const lineas = delMes.slice().sort((a,b)=>b.monto-a.monto);
+  const detHtml = `<div class="fc"><h3>Detalle del resumen · ${ymLabel(ym)}</h3><div class="fc-sub">${lineas.length} consumos, de mayor a menor.</div>
+    ${lineas.map(r=>{ const c=cuotaDe(r.nota); return `<div class="hb" style="grid-template-columns:1fr auto;"><div class="hb-l">${esc(r.nota||r.sub)}<small>${esc(r.grupo)} › ${esc(r.sub)} · compra ${ddmm(r.fechaSort)}${c?` · cuota ${c.k}/${c.n}`:""}</small></div><div class="hb-v">${fmt(r.monto)}</div></div>`; }).join("")}</div>`;
+
+  body.innerHTML = selHtml + evoHtml + grupoHtml + cuotasHtml + detHtml;
+  body.querySelectorAll("[data-m]").forEach(c=>c.onclick=()=>{ TJ_MES=c.dataset.m; renderTarjeta(); });
+}
+
 $("btnReload").onclick = () => { const u = new URL(location.href); u.searchParams.set("v", Date.now()); location.replace(u.toString()); };
 document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{
   document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("active",x===t));
   $("view-mov").classList.toggle("hidden", t.dataset.view!=="mov");
   $("view-fijos").classList.toggle("hidden", t.dataset.view!=="fijos");
+  $("view-tarjeta").classList.toggle("hidden", t.dataset.view!=="tarjeta");
 });
 
 /* ============================================================
